@@ -1,0 +1,251 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Andreas Economides"
+date: "Saturday, July 25, 2015"
+output: html_document
+---
+
+This is the Course Project for the Practical Machine Learning course, part of the Data Science specialization on Coursera.
+
+#Background information
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+#Data Sources
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. They have been very generous in allowing their data to be used for this kind of assignment.
+
+#Project goals and objectives
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. We may use any of the other variables to predict with. Create a report describing how model was built, how cross validation has been used, what we the expected out of sample error is, and justify the choices we made. Also use our prediction model to predict 20 different test cases. 
+
+1. Submission should consist of a link to a Github repo with the R markdown and compiled HTML file describing our analysis. Text of the writeup has to be less than 2000 words and the number of figures less than 5. It is preferred that we submit a repo with a gh-pages branch so the HTML page can be viewed online (in order to make it easy for graders).
+2. We should also apply your machine learning algorithm to the 20 test cases available in the test data above and submit your predictions in appropriate format to the programming assignment for automated grading.
+
+##Data Analysis
+
+#Cross-Validation and the expected out-of-sample error
+
+We are going to use Cross-Validation by partitioning the original training data into a new 60% training data set and the remaining 40% as another testing data set. This way we can use our new "subTesting" data set to estimate the out-of-sample error of the original testing data set. This will be achieved by applying different prediction algorithms on new "subTesting" data set and then decide which method is the most accurate to use for our final predictions on the original testing data set.
+
+#Loading the data in R
+
+In order for the code to run, the following packages have to be installed.
+
+```{r}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(knitr)
+
+```
+
+This function is used in order for the project to be reproducible. The same number has to be used, in order for the same "random" values to be generated.
+
+```{r}
+set.seed(305055)
+```
+
+Firstly, we load the two data files in R, assumed that the files have already been downloaded and are located in the current working directory. Also, when loading we set R to treat empty values as NA's.
+
+```{r}
+training <- read.csv((file="pml-training.csv"), na.strings=c("NA","#DIV/0!","")) #treat empty values as NA's
+testing <- read.csv((file="pml-testing.csv"), na.strings=c("NA","#DIV/0!",""))
+```
+
+#Partition the training data set
+
+We are going to partition the training data into a 60% training data set and the remaining 40% as another testing data set.
+
+```{r}
+parTraining <- createDataPartition(training$classe, p=0.6, list=FALSE) #partition the training data set
+subTraining <- training[parTraining, ]
+subTesting <- training[-parTraining, ]
+dim(subTraining); dim(subTesting)
+```
+
+#Clean the data
+
+Next, we identify and remove from our new sets, any variables that have an extremely low variance, hence of low significance towards our prediction model.
+
+```{r}
+nearzerovariance <- nearZeroVar(subTraining, saveMetrics=TRUE) #remove near zero variance variables from the "subTraining" set
+subTraining <- subTraining[,nearzerovariance$nzv==FALSE]
+
+nearzerovariance <- nearZeroVar(subTesting,saveMetrics=TRUE) ##remove near zero variance variables from the "subTesting" set
+subTesting <- subTesting[,nearzerovariance$nzv==FALSE]
+```
+
+Remove the first column of our "newTraining" data set as it is not needed.
+
+```{r}
+subTraining <- subTraining[c(-1)] #remove the first column
+```
+
+Variables with too many NA's will reduce the reliability of our predictions, so it's better to remove any variables that consist of more than 60% NA values. This can be done by creating a loop that checks the percentage of NA's in each variable and forms a new training data set that excludes such variables.
+
+```{r}
+traintemp <- subTraining #remove any variables with more than 60% missing values
+for(i in 1:length(subTraining)) {
+    if( sum( is.na( subTraining[, i] ) ) /nrow(subTraining) >= .6) {
+        for(j in 1:length(traintemp)) {
+            if( length( grep(names(subTraining[i]), names(traintemp)[j]) ) == 1)  {
+                traintemp <- traintemp[ , -j]
+            }   
+        } 
+    }
+}
+```
+
+```{r}
+subTraining <- traintemp #rename the new clean data set
+rm(traintemp)
+```
+
+Rename the new clean data set for convenience
+
+It is of high importance to carry out the exact same operations on "subTesting" and the original "testing" data sets
+
+```{r}
+clean1 <- colnames(subTraining) 
+clean2 <- colnames(subTraining[, -58])
+subTesting <- subTesting[clean1] #apply same operations used to clean the data on the "subTesting" data set
+testing <- testing[clean2] ##apply same operations used to clean the data on the testing data set, with the "classe" variable already removed
+
+dim(subTraining) #check the dimensions
+```
+
+```{r}
+dim(subTesting) #check the dimensions
+```
+
+```{r}
+dim(testing) #check the dimensions
+```
+
+Lastly, before we carry out our Machine Learning prediction algorithms, we must carry out coercion on our two data sets, in order to make sure that all our data values in our "newTraining" and "testing" data sets are of the same type
+
+```{r}
+for (i in 1:length(testing) ) { #used to transorm the variables of the "subTraining" and testing data sets into the same class
+  for(j in 1:length(subTraining)) {
+    if( length( grep(names(subTraining[i]), names(testing)[j]) ) == 1)  {
+      class(testing[j]) <- class(subTraining[i])
+    }      
+  }      
+}
+testing <- rbind(subTraining[2, -58] , testing) #check if coercion was successful
+testing <- testing[-1,]
+```
+
+```{r}
+set.seed(305055)
+```
+
+#Decision Tree alghorithm
+
+Carry out the Decision Tree algorithm for prediction, and chose to produce the plot with colours
+
+```{r}
+modelFitDT <- rpart(classe ~ ., data=subTraining, method="class") #carry out the Decision Tree algorithm
+fancyRpartPlot(modelFitDT) #produce the plot
+```
+Produce the Confusion Matrix graphically, as well as other statistics and verify that the results are reasonable
+
+```{r}
+predictionsDT <- predict(modelFitDT, subTesting, type = "class") #produce the Confusion Matrix graphically,
+cmDT <- confusionMatrix(predictionsDT, subTesting$classe)
+cmDT
+plot(cmDT$table, col = cmDT$byClass, main = paste("Decision Tree Confusion Matrix - accuracy :", round(cmDT$overall['accuracy'], 2)))
+```
+
+#Random Forests
+
+Carry out the Random Forests algorithm for prediction
+
+```{r}
+set.seed(305055)
+modelFitRF <- randomForest(classe ~ ., data=subTraining) #carry out the Random Forests algorithm
+```
+Predict the in-sample error
+```{r}
+predictionsRF <- predict(modelFitRF, subTesting, type = "class")
+```
+Produce the Confusion Matrix graphically, as well as other statistics and verify that the results are reasonable
+
+```{r}
+cmRF <- confusionMatrix(predictionsRF, subTesting$classe) 
+cmRF
+plot(modelFitRF) #plot that shows how the error changes in relation to the number of trees
+plot(cmRF$table, col = cmDT$byClass, main = paste("Random Forest Confusion Matrix - accuracy :", round(cmRF$overall['accuracy'], 2))) #produce the Confusion Matrix graphically
+```
+
+#Generalized Boosted Regression
+
+Finally, apply the Generalized Booster Regression algorithm for prediction
+
+```{r}
+set.seed(305055)
+control <- trainControl(method = "repeatedcv", #carry out the Generalized Booster Regression algorithm
+                           number = 5,
+                           repeats = 1)
+```
+```{r}
+modelFitGBM <- train(classe ~ ., data=subTraining, method = "gbm",
+                 trControl = control,
+                 verbose = FALSE)
+```
+
+```{r}
+modelFitGBM2 <- modelFitGBM$finalModel
+```
+```{r}
+GBMtest <- predict(modelFitGBM, newdata=subTesting)
+```
+Produce the Confusion Matrix graphically, as well as other statistics and verify that the results are reasonable
+
+```{r}
+GBMacTest <- confusionMatrix(GBMtest, subTesting$classe) #produce the Confusion Matrix graphically
+GBMacTest
+```
+The plot shows clearly how accuracy varies in relation to the maximum tree depth and the number of boosting iterations.
+
+```{r}
+plot(modelFitGBM, ylim=c(0.9, 1)) #plot of how accuracy varies in relation to the maximum tree depth and the number of boosting iterations
+```
+
+Conclusion and final prediction
+
+Comparing the accuracy of all three methods applied on the training dataset, we can see that the Decidion Tree algorithm gave an accuracy of 86.77%, the Random Forests algorithm an accuracy of 99.86% and lastly, the GBM algorithm gave an accuracy of 99.62%.
+
+Therefore we conclude that the Random Forests algorirthm is the most reliable to use in order to predict the manner ("classe") in which the exercise was executed in each of the 20 cases.
+
+```{r}
+predictionFinal <- predict(modelFitRF, testing, type = "class") #apply the Random Forests algorithm on the original testing set
+predictionFinal
+```
+
+Output the results in a text file for submission
+
+```{r}
+pml_write_files = function(x){ #output the results in a text file for submission
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictionFinal)
+
+```
